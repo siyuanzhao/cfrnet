@@ -90,34 +90,52 @@ class cfr_net:
         h_rep = h_in[len(h_in)-1]
 
         ''' Construct output/regression layers '''
-        h_out = [tf.concat(1,[h_rep,t])]
+        # residual block
+        it = tf.where(t>0)[:,0]
+        ic = tf.where(t<1)[:,0]
+
+        #h_out = [tf.concat(1,[h_rep,t])]
+        h_out = [h_rep]
         for i in range(0,n_out):
             if i==0:
-                weights_out.append(tf.Variable(tf.random_normal([dim_in+1,dim_out], stddev=weight_init)))
+                weights_out.append(tf.Variable(tf.random_normal([dim_in,dim_out], stddev=weight_init)))
             else:
                 weights_out.append(tf.Variable(tf.random_normal([dim_out,dim_out], stddev=weight_init)))
             biases_out.append(tf.Variable(tf.random_normal([1,dim_out], stddev=weight_init)))
-            z = tf.matmul(h_out[i], weights_out[i]) + biases_out[i]
-            
-            h_out.append(tf.nn.relu(z))
+            z = tf.matmul(h_rep, weights_out[i]) + biases_out[i]
+
+            if i == (n_out-1):
+                h_out.append(tf.nn.relu(z+h_rep))
+            else:
+                h_out.append(tf.nn.relu(z))
             h_out[i+1] = tf.nn.dropout(h_out[i+1], do_out)
 
         weights_pred = tf.Variable(tf.random_normal([dim_out,1], stddev=weight_init))
         bias_pred = tf.Variable(tf.random_normal([1], stddev=weight_init))
-
         ''' Construct linear classifier '''
-        h_pred = h_out[len(h_out)-1]
-        y = tf.matmul(h_pred, weights_pred)+bias_pred
+        hf_pred = h_out[len(h_out)-1]
+        # prediction in treatment
+        yt = tf.matmul(hf_pred, weights_pred)+bias_pred
+        # prediction in control
+        yc = tf.matmul(h_rep, weights_pred)+bias_pred
 
+        y = t*yt + (1-t)*yc
+        pred_yt = tf.gather(yt, it)
+        pred_yc = tf.gather(yc, ic)
+        yt_ = tf.gather(y_, it)
+        yc_ = tf.gather(y_, ic)
         ''' Construct loss function '''
+        #sq_error = tf.reduce_mean(tf.concat(0, [tf.square(yt_ - pred_yt), tf.square(yc_ - pred_yc)]))
         sq_error = tf.reduce_mean(tf.square(y_ - y))
         pred_error = tf.sqrt(sq_error)
 
         if FLAGS.loss == 'l1':
-            risk = tf.reduce_mean(tf.abs(y_-y))
+            risk = tf.reduce_mean(tf.concat(0, [tf.abs(yt_ - pred_yt), tf.abs(yc_ - pred_yc)]))
         elif FLAGS.loss == 'log':
-            y = 0.995/(1.0+tf.exp(-y)) + 0.0025
-            risk = -tf.reduce_mean(y_*tf.log(y) + (1.0-y_)*tf.log(1.0-y))
+            pred_yt = 0.995/(1.0+tf.exp(-pred_yt)) + 0.0025
+            pred_yc = 0.995/(1.0+tf.exp(-pred_yc)) + 0.0025
+            risk = -tf.reduce_mean(tf.concat(0, [yt_*tf.log(pred_yt) + (1.0-yt_)*tf.log(1.0-pred_yt),
+                                                 yc_*tf.log(pred_yc) + (1.0-yc_)*tf.log(1.0-pred_yc)]))
             pred_error = risk
         else:
             risk = sq_error
@@ -136,6 +154,8 @@ class cfr_net:
                 if not (FLAGS.varsel and i==0): # No penalty on W in variable selection
                     regularization = regularization + tf.nn.l2_loss(weights_in[i])
 
+        '''Entropy minimization'''
+        
         ''' Imbalance error '''
         if FLAGS.imb_fun == 'mmd2_rbf':
             imb_dist = mmd2_rbf(h_rep,t,p,sig)
