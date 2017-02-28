@@ -6,6 +6,8 @@ import random
 import datetime
 import cfr_net as cfr
 import traceback
+import pandas as pd
+from sklearn.metrics import mean_squared_error
 
 ''' Define parameter flags '''
 FLAGS = tf.app.flags.FLAGS
@@ -52,6 +54,7 @@ def train(outdir):
     outform = outdir+'y_pred'
     lossform = outdir+'loss'
     logfile = outdir+'log.txt'
+    metric_file = outdir + 'metrics.txt'
     f = open(logfile,'w')
     f.close()
 
@@ -123,7 +126,7 @@ def train(outdir):
             do_in:1.0, do_out:1.0}
 
     ''' Initialize tensorflow variables '''
-    sess.run(tf.initialize_all_variables())
+    sess.run(tf.global_variables_initializer())
 
     ''' Compute losses before training'''
     losses = []
@@ -210,10 +213,24 @@ def train(outdir):
     ''' Save representations '''
     if FLAGS.save_rep:
         reps = sess.run([CFR.h_rep], feed_dict={x_: x_all, do_in:1.0, do_out:0.0})
-        np.savez(repfile, rep=reps )
+        np.savez(repfile, rep=reps)
+
+    # calculate rmse and pehe
+    df = pd.read_csv('data/ihdp_sample.csv', header=None)
+    df['treatment_effect'] = np.where(df[0]==1, df[1]-df[2], df[2]-df[1])
+    pred_df = pd.read_csv('{}.csv'.format(outform), header=None)
+    pred_df['condition'] = df[0]
+    pred_df['treatment_effect'] = np.where(pred_df['condition']==1, pred_df[0]-pred_df[1], pred_df[1]-pred_df[0])
+    pehe = np.sqrt(mean_squared_error(pred_df['treatment_effect'].values, df['treatment_effect'].values))
+    pred_df['ite_for_rmse'] = np.where(pred_df['condition']==1, df[1]-pred_df[1], pred_df[1]-df[1])
+    rmse = np.sqrt(mean_squared_error(pred_df['ite_for_rmse'].values, df['treatment_effect'].values))
+    print('\nPEHE = {}\nRMSE = {}\n'.format(pehe, rmse))
+    with open(metric_file, 'w') as f:
+        f.write('PEHE = {}\n'.format(pehe))
+        f.write('rmse = {}'.format(rmse))
 
 def log(logfile,str):
-    """ Log and print string """
+    """ LOG AND PRINT STRING """
     with open(logfile,'a') as f:
         f.write(str+'\n')
     print str
